@@ -1,0 +1,170 @@
+@startuml C2_ToBe_GoFuture_Microservices
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title GoFuture — C2 Container Diagram (To-Be Microservice Architecture)
+
+' === ACTORS ===
+Person(passenger, "Пассажир", "Заказывает, отслеживает и оплачивает поездки")
+Person(driver, "Водитель", "Принимает заказы, управляет поездками\nи получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет корпоративными поездками и счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты водителям")
+Person(dev_engineer, "Разработчик", "Разрабатывает и деплоит сервисы")
+Person(sre_engineer, "SRE-инженер", "Мониторит и поддерживает систему")
+
+' === CLIENT APPS ===
+System_Boundary(clients, "Client Applications") {
+    Container(app_passenger, "Passenger App", "iOS/Android/Huawei", "Мобильное приложение пассажира")
+    Container(app_driver, "Driver App", "iOS/Android/Huawei", "Мобильное приложение водителя")
+    Container(web_portal, "Corporate Web Portal", "React/Vue.js", "Веб-портал корпоративных клиентов")
+    Container(admin_panel, "Admin Panel", "React/Vue.js", "Панель администрирования и управления выплатами")
+}
+
+' === API GATEWAY ===
+System_Boundary(edge_layer, "Edge Layer") {
+    Container(api_gateway, "API Gateway", "Kong / NGINX Ingress", "Маршрутизация запросов, rate limiting,\nаутентификация, Strangler Fig роутинг")
+}
+
+' === DOMAIN SERVICES ===
+System_Boundary(domain_services, "Domain Microservices") {
+    Container(booking_svc, "Booking Service", "FastAPI + PostgreSQL", "Управление жизненным циклом поездки:\nсоздание, назначение водителя, завершение")
+    Container(driver_svc, "Driver Service", "FastAPI + PostgreSQL", "Профили водителей, доступность,\nотслеживание местоположения")
+    Container(pricing_svc, "Pricing Service", "FastAPI + PostgreSQL + Redis", "Динамическое ценообразование,\nсурж-коэффициенты, расчёт стоимости")
+    Container(payments_svc, "Payments Service", "FastAPI + PostgreSQL", "Обработка платежей пассажиров\nи выплат водителям")
+    Container(notification_svc, "Notification Service", "FastAPI + PostgreSQL + Redis", "Управление push-уведомлениями\nдля всех платформ")
+    Container(geography_svc, "Geography Service", "FastAPI + Elasticsearch", "Геопоиск водителей, маршрутизация,\nуправление зонами")
+    Container(analytics_svc, "Analytics Service", "FastAPI + ClickHouse", "Сбор и обработка аналитики,\nбизнес-отчёты в реальном времени")
+    Container(fraud_svc, "Fraud Service", "FastAPI + PostgreSQL", "Обнаружение мошенничества,\nML-скоринг риска")
+}
+
+' === LEGACY MONOLITH (transitional) ===
+System_Boundary(legacy_layer, "Legacy (Transitional)") {
+    Container(monolith, "GoFuture Monolith", "Django Application", "Остаточная бизнес-логика\n(постепенно выводится из эксплуатации)")
+    Container(acl, "Anti-Corruption Layer", "FastAPI Adapter", "Адаптер между новыми сервисами\nи монолитной БД на период миграции")
+}
+
+' === EVENT BUS ===
+System_Boundary(event_platform, "Event Platform") {
+    ContainerQueue(kafka, "Event Bus", "Apache Kafka", "Асинхронная межсервисная коммуникация,\nсобытия доменов")
+    Container(schema_registry, "Schema Registry", "Confluent Schema Registry", "Управление схемами событий\n(Avro/Protobuf)")
+}
+
+' === DATA STORES ===
+System_Boundary(data_stores, "Shared Data Infrastructure") {
+    ContainerDb(redis_cache, "Distributed Cache", "Redis Cluster", "Кеширование данных,\nсессии, rate limiting")
+    ContainerDb(elasticsearch, "Search Engine", "Elasticsearch / OpenSearch", "Геопоиск водителей,\nполнотекстовый поиск")
+    ContainerDb(clickhouse, "Analytics DB", "ClickHouse", "Хранение аналитических данных\nи метрик бизнеса")
+}
+
+' === OBSERVABILITY ===
+System_Boundary(observability, "Observability Platform") {
+    Container(prometheus, "Prometheus", "Monitoring", "Сбор и хранение метрик")
+    Container(grafana, "Grafana", "Visualization", "Дашборды и визуализация метрик")
+    Container(loki, "Loki", "Log Aggregation", "Централизованный сбор логов")
+    Container(tempo, "Tempo", "Distributed Tracing", "Распределённая трассировка запросов")
+    Container(alertmanager, "Alertmanager", "Alert System", "Управление алертами и эскалациями")
+}
+
+' === CI/CD ===
+System_Boundary(cicd, "CI/CD Platform") {
+    Container(github_actions, "GitHub Actions", "CI/CD", "Сборка, тестирование, публикация образов")
+    Container(argocd, "Argo CD", "GitOps", "Непрерывная доставка в Kubernetes")
+    Container(helm, "Helm Charts", "Package Manager", "Шаблонизация деплоя сервисов")
+    Container(docker_registry, "Container Registry", "Docker Registry", "Хранение Docker-образов")
+}
+
+' === EXTERNAL SYSTEMS ===
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картографический сервис")
+System_Ext(fcm, "Firebase Cloud Messaging", "Push-уведомления Android")
+System_Ext(apns, "Apple Push Notification Service", "Push-уведомления iOS")
+System_Ext(huawei_push, "Huawei Push Kit", "Push-уведомления Huawei")
+System_Ext(bank_api, "Bank API", "Банковские выплаты водителям")
+
+' === RELATIONSHIPS: Users → Client Apps ===
+Rel(passenger, app_passenger, "Использует")
+Rel(driver, app_driver, "Использует")
+Rel(manager, web_portal, "Использует")
+Rel(accountant, admin_panel, "Использует")
+Rel(dev_engineer, github_actions, "Запускает пайплайны")
+Rel(sre_engineer, grafana, "Мониторит систему")
+
+' === Client Apps → API Gateway ===
+Rel(app_passenger, api_gateway, "REST API", "HTTPS")
+Rel(app_driver, api_gateway, "REST API", "HTTPS")
+Rel(web_portal, api_gateway, "REST API", "HTTPS")
+Rel(admin_panel, api_gateway, "REST API", "HTTPS")
+
+' === API Gateway → Services (Strangler Fig routing) ===
+Rel(api_gateway, booking_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, driver_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, pricing_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, payments_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, geography_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, analytics_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, monolith, "Немигрированные эндпоинты", "REST")
+
+' === Synchronous inter-service calls ===
+Rel(booking_svc, driver_svc, "Назначение водителя", "REST")
+Rel(booking_svc, pricing_svc, "Расчёт стоимости", "REST")
+Rel(booking_svc, geography_svc, "Построение маршрута", "REST")
+Rel(booking_svc, fraud_svc, "Проверка на фрод", "REST")
+Rel(payments_svc, fraud_svc, "Проверка транзакции", "REST")
+
+' === Async events via Kafka ===
+Rel(booking_svc, kafka, "Публикация событий поездки", "Kafka")
+Rel(driver_svc, kafka, "Публикация событий водителя", "Kafka")
+Rel(pricing_svc, kafka, "Публикация событий ценообразования", "Kafka")
+Rel(payments_svc, kafka, "Публикация событий платежей", "Kafka")
+Rel(fraud_svc, kafka, "Публикация событий фрода", "Kafka")
+
+Rel(kafka, notification_svc, "Потребление событий уведомлений", "Kafka")
+Rel(kafka, analytics_svc, "Потребление всех доменных событий", "Kafka")
+Rel(kafka, fraud_svc, "Потребление событий для ML", "Kafka")
+Rel(kafka, payments_svc, "Потребление событий оплаты", "Kafka")
+
+Rel(kafka, schema_registry, "Валидация схем", "HTTP")
+
+' === Services → External Systems ===
+Rel(payments_svc, yandex_pay, "Обработка платежей", "REST API")
+Rel(payments_svc, bank_api, "Банковские выплаты", "REST API")
+Rel(geography_svc, yandex_maps, "Геоданные и маршруты", "REST API")
+Rel(notification_svc, fcm, "Push Android", "REST API")
+Rel(notification_svc, apns, "Push iOS", "REST API")
+Rel(notification_svc, huawei_push, "Push Huawei", "REST API")
+
+' === Services → Shared Data ===
+Rel(geography_svc, elasticsearch, "Геопоиск водителей", "HTTP")
+Rel(pricing_svc, redis_cache, "Кеш ценовых правил", "Redis Protocol")
+Rel(driver_svc, redis_cache, "Кеш локаций водителей", "Redis Protocol")
+Rel(notification_svc, redis_cache, "Кеш токенов устройств", "Redis Protocol")
+Rel(analytics_svc, clickhouse, "Запись аналитики", "HTTP/Native")
+
+' === Legacy ACL ===
+Rel(acl, monolith, "Адаптация запросов\nк монолитной БД", "ORM/SQL")
+Rel(booking_svc, acl, "Данные в период миграции", "REST")
+
+' === Observability ===
+Rel(booking_svc, prometheus, "Метрики", "OpenTelemetry")
+Rel(driver_svc, prometheus, "Метрики", "OpenTelemetry")
+Rel(pricing_svc, prometheus, "Метрики", "OpenTelemetry")
+Rel(payments_svc, prometheus, "Метрики", "OpenTelemetry")
+Rel(kafka, prometheus, "Метрики Kafka", "Kafka Exporter")
+Rel(prometheus, grafana, "Визуализация", "PromQL")
+Rel(prometheus, alertmanager, "Алерты", "Alert Rules")
+Rel(alertmanager, sre_engineer, "Уведомления", "Slack/PagerDuty")
+Rel(booking_svc, loki, "Логи", "Loki API")
+Rel(booking_svc, tempo, "Трассировки", "OpenTelemetry")
+
+' === CI/CD ===
+Rel(github_actions, docker_registry, "Публикация образов", "Docker Push")
+Rel(argocd, helm, "Деплой сервисов", "Helm Install")
+Rel(github_actions, argocd, "Триггер деплоя", "GitOps Sync")
+
+' === Analytics BI ===
+Rel(clickhouse, grafana, "Бизнес-дашборды", "SQL")
+Rel(grafana, manager, "Бизнес-отчёты", "Web UI")
+Rel(grafana, accountant, "Финансовые отчёты", "Web UI")
+
+@enduml
