@@ -1,0 +1,402 @@
+@startuml C2_Multitenant_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title GoFuture — C2 Container Diagram (Multi-Tenant Platform)
+
+' === NEW ELEMENT TAGS (RED for new/changed) ===
+AddElementTag("new", $bgColor="#ff4444", $fontColor="white", $borderColor="#cc0000")
+AddElementTag("new_db", $bgColor="#cc3333", $fontColor="white", $borderColor="#990000")
+AddElementTag("new_queue", $bgColor="#dd3333", $fontColor="white", $borderColor="#aa0000")
+AddElementTag("new_boundary", $borderColor="#cc0000", $fontColor="#cc0000")
+AddRelTag("new", $textColor="#cc0000", $lineColor="#cc0000")
+
+' === ACTORS ===
+Person(passenger, "Пассажир", "Заказывает, отслеживает и оплачивает поездки")
+Person(driver, "Водитель", "Принимает заказы, управляет поездками\nи получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет корпоративными поездками и счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты водителям")
+Person(dev_engineer, "Разработчик", "Разрабатывает и деплоит сервисы")
+Person(sre_engineer, "SRE-инженер", "Мониторит и поддерживает систему")
+Person(partner_admin, "Администратор партнёра", "Управляет своим тенантом,\nпользователями и конфигурацией", $tags="new")
+Person(partner_developer, "Разработчик партнёра", "Интегрируется с GoFuture\nчерез Partner API", $tags="new")
+
+' === CLIENT APPS ===
+System_Boundary(clients, "Client Applications") {
+    Container(app_passenger, "Passenger App", "iOS/Android/Huawei", "Мобильное приложение пассажира")
+    Container(app_driver, "Driver App", "iOS/Android/Huawei", "Мобильное приложение водителя")
+    Container(web_portal, "Corporate Web Portal", "React/Vue.js", "Веб-портал корпоративных клиентов")
+    Container(admin_panel, "Admin Panel", "React/Vue.js", "Панель администрирования и управления выплатами")
+    Container(partner_portal, "Partner Portal", "React/Vue.js", "Портал партнёра: регистрация,\nуправление тенантом, дашборды", $tags="new")
+}
+
+' === GLOBAL EDGE / SECURITY LAYER ===
+System_Boundary(global_edge, "Global Edge / Security Layer") {
+    Container(cloudflare_waf, "WAF / DDoS Protection", "Cloudflare", "Защита от DDoS, SQL-инъекций,\nXSS, OWASP Top 10, rate limiting")
+    Container(geodns, "GeoDNS", "Cloudflare DNS / Route 53", "Маршрутизация пользователей\nк ближайшему региону по геолокации")
+    Container(cdn, "CDN", "Cloudflare CDN", "Кеширование статического контента,\nAnycast-сеть, edge-оптимизация")
+    Container(global_lb, "Global Load Balancer", "Cloudflare LB", "Балансировка между регионами,\nhealth checks, автоматический failover")
+}
+
+' ============================================================
+' === REGION: CIS (Moscow, Yandex Cloud) — FULL DETAIL ===
+' ============================================================
+System_Boundary(region_cis, "Region: CIS (Moscow, Yandex Cloud)") {
+
+    ' === EDGE LAYER ===
+    System_Boundary(edge_layer_cis, "Edge Layer") {
+        Container(api_gateway_cis, "API Gateway", "Kong / NGINX Ingress", "Маршрутизация запросов, rate limiting,\nJWT-валидация через Keycloak,\nX-Tenant-ID injection")
+        Container(service_mesh_cis, "Service Mesh", "Istio", "mTLS шифрование межсервисного трафика,\nretry, circuit breaker")
+    }
+
+    ' === [NEW] MULTI-TENANT PLATFORM ===
+    System_Boundary(multitenant_platform_cis, "Multi-Tenant Platform") {
+        Container(keycloak_cis, "Keycloak IAM", "Keycloak", "Identity Provider: OIDC/OAuth 2.0,\nRealm-per-tenant, SSO, RBAC,\nфедерация с внешними IdP", $tags="new")
+        Container(tenant_mgmt_svc_cis, "Tenant Management Service", "FastAPI + PostgreSQL", "Жизненный цикл тенантов: создание,\nактивация, деактивация, квоты,\nагрегация статусов провижининга", $tags="new")
+        Container(onboarding_svc_cis, "Partner Onboarding Service", "FastAPI", "Регистрация партнёров, валидация,\nworkflow одобрения заявок", $tags="new")
+    }
+
+    ' === [NEW] PROVISIONING WORKERS ===
+    System_Boundary(provisioning_workers_cis, "Provisioning Workers") {
+        Container(keycloak_provisioner_cis, "Keycloak Provisioner", "FastAPI Worker", "Создание реалма, ролей, клиентов,\nадминистратора партнёра в Keycloak", $tags="new")
+        Container(db_provisioner_cis, "Database Provisioner", "FastAPI Worker", "Создание PostgreSQL-схемы,\nAlembic-миграции, настройка RLS", $tags="new")
+        Container(monitoring_provisioner_cis, "Monitoring Provisioner", "FastAPI Worker", "Создание Grafana Organization,\nпровижининг дашбордов,\nrecording rules для тенанта", $tags="new")
+    }
+
+    ' === [NEW] AUDIT & COMPLIANCE ===
+    System_Boundary(audit_layer_cis, "Audit & Compliance") {
+        Container(audit_svc_cis, "Audit Log Service", "FastAPI + Kafka Consumer", "Сбор аудит-событий:\nдействия администраторов,\nизменения конфигурации, CRUD тенантов", $tags="new")
+        ContainerDb(audit_db_cis, "Audit Storage", "ClickHouse", "Хранение аудит-логов,\nзапросы для compliance-отчётов", $tags="new_db")
+    }
+
+    ' === DOMAIN SERVICES ===
+    System_Boundary(domain_services_cis, "Domain Microservices") {
+        Container(booking_svc_cis, "Booking Service", "FastAPI + PostgreSQL", "Жизненный цикл поездки, координация Saga,\nстатус бронирования, Outbox-таблица\n+ tenant_id в каждом запросе")
+        Container(driver_svc_cis, "Driver Service", "FastAPI + PostgreSQL + Redis", "Профили водителей, доступность,\nGPS-отслеживание, Outbox-таблица")
+        Container(pricing_svc_cis, "Pricing Service", "FastAPI + PostgreSQL + Redis", "Динамическое ценообразование,\nсурж-коэффициенты, расчёт стоимости")
+        Container(payments_svc_cis, "Payments Service", "FastAPI + PostgreSQL", "Обработка платежей, авторизация\nсредств, выплаты водителям, Outbox-таблица")
+        Container(notification_svc_cis, "Notification Service", "FastAPI + PostgreSQL + Redis", "Push-уведомления для всех платформ,\nevent-driven потребитель")
+        Container(geography_svc_cis, "Geography Service", "FastAPI + Elasticsearch + Redis", "Геопоиск водителей, маршрутизация,\nуправление зонами, Outbox-таблица")
+        Container(analytics_svc_cis, "Analytics Service", "FastAPI + ClickHouse + Kafka", "Real-time аналитика, агрегация событий,\nбизнес-отчёты, ML-пайплайны")
+        Container(fraud_svc_cis, "Fraud Service", "FastAPI + PostgreSQL", "ML-скоринг риска, фрод-детекция,\nOutbox-таблица")
+    }
+
+    ' === LEGACY MONOLITH (transitional) ===
+    System_Boundary(legacy_layer_cis, "Legacy (Transitional)") {
+        Container(monolith_cis, "GoFuture Monolith", "Django Application", "Остаточная бизнес-логика\n(постепенно выводится из эксплуатации)")
+        Container(acl_cis, "Anti-Corruption Layer", "FastAPI Adapter", "Адаптер между новыми сервисами\nи монолитной БД на период миграции")
+    }
+
+    ' === EVENT PLATFORM ===
+    System_Boundary(event_platform_cis, "Event Platform") {
+        ContainerQueue(kafka_cis, "Event Bus", "Apache Kafka", "Центральный брокер событий,\nрегиональное партиционирование,\ntenant_id в ключах/заголовках")
+        Container(schema_registry_cis, "Schema Registry", "Confluent Schema Registry", "Управление схемами событий\n(Avro/Protobuf), контроль совместимости")
+        Container(debezium_cis, "Outbox Relay", "Debezium CDC", "Захват изменений из Outbox-таблиц\nсервисов через PostgreSQL WAL")
+        Container(flink_cis, "Stream Processing", "Apache Flink", "Потоковая обработка: сурж-прайсинг,\nфрод-скоринг, аналитика, матчинг")
+        ContainerQueue(retry_topics_cis, "Retry / DLQ Topics", "Apache Kafka", "Повторная обработка с экспоненциальной\nзадержкой и Dead Letter Queue")
+    }
+
+    ' === DATA STORES ===
+    System_Boundary(data_stores_cis, "Shared Data Infrastructure") {
+        ContainerDb(redis_cache_cis, "Distributed Cache", "Redis Cluster", "Кеширование данных, сессии,\nrate limiting, локации водителей\nkey prefix: {tenant_id}:")
+        ContainerDb(elasticsearch_cis, "Search Engine", "Elasticsearch / OpenSearch", "Геопоиск водителей,\nindex-per-tenant: {tenant_id}-{index}")
+        ContainerDb(clickhouse_cis, "Analytics DB", "ClickHouse", "Хранение аналитических данных,\nметрик бизнеса, tenant_id column")
+        ContainerDb(pg_primary_cis, "PostgreSQL Primary", "Patroni + PostgreSQL", "Мастер-узел БД региона CIS,\nschema-per-tenant изоляция,\nавтоматический failover через Patroni")
+        ContainerDb(tenant_metadata_db_cis, "Tenant Metadata DB", "PostgreSQL", "Метаданные тенантов: конфигурация,\nквоты, статусы, контактные данные", $tags="new_db")
+    }
+
+    ' === NETWORK SECURITY ===
+    Container(network_policy_cis, "Network Policies", "Calico", "Сетевые политики: east-west\nфильтрация трафика в K8s кластере")
+}
+
+' ============================================================
+' === REGION: SEA (Singapore, AWS) — COLLAPSED ===
+' ============================================================
+System_Boundary(region_sea, "Region: SEA (Singapore, AWS ap-southeast-1)") {
+    Container(api_gateway_sea, "API Gateway", "Kong / NGINX Ingress", "Региональная маршрутизация запросов")
+    Container(keycloak_sea, "Keycloak IAM", "Keycloak", "Региональный экземпляр IAM", $tags="new")
+    Container(services_sea, "Domain Microservices", "FastAPI (8 сервисов)", "Полный набор микросервисов:\nBooking, Driver, Pricing, Payments,\nNotification, Geography, Analytics, Fraud")
+    Container(tenant_platform_sea, "Tenant Platform Services", "FastAPI", "Tenant Mgmt + Onboarding +\nProvisioning Workers", $tags="new")
+    ContainerQueue(kafka_sea, "Event Bus", "Apache Kafka", "Региональный Kafka-кластер\nс tenant_id в ключах/заголовках", $tags="new_queue")
+    ContainerDb(pg_primary_sea, "PostgreSQL Primary", "Patroni + PostgreSQL", "Мастер-узел БД региона SEA,\nschema-per-tenant", $tags="new_db")
+    ContainerDb(redis_sea, "Redis Cache", "Redis Cluster", "Региональный кеш", $tags="new_db")
+    Container(service_mesh_sea, "Service Mesh", "Istio", "mTLS, circuit breaker")
+    Container(network_policy_sea, "Network Policies", "Calico", "East-west фильтрация трафика")
+}
+
+' ============================================================
+' === REGION: LATAM (São Paulo, AWS) — COLLAPSED ===
+' ============================================================
+System_Boundary(region_latam, "Region: LATAM (São Paulo, AWS sa-east-1)") {
+    Container(api_gateway_latam, "API Gateway", "Kong / NGINX Ingress", "Региональная маршрутизация запросов")
+    Container(keycloak_latam, "Keycloak IAM", "Keycloak", "Региональный экземпляр IAM", $tags="new")
+    Container(services_latam, "Domain Microservices", "FastAPI (8 сервисов)", "Полный набор микросервисов:\nBooking, Driver, Pricing, Payments,\nNotification, Geography, Analytics, Fraud")
+    Container(tenant_platform_latam, "Tenant Platform Services", "FastAPI", "Tenant Mgmt + Onboarding +\nProvisioning Workers", $tags="new")
+    ContainerQueue(kafka_latam, "Event Bus", "Apache Kafka", "Региональный Kafka-кластер\nс tenant_id в ключах/заголовках", $tags="new_queue")
+    ContainerDb(pg_primary_latam, "PostgreSQL Primary", "Patroni + PostgreSQL", "Мастер-узел БД региона LATAM,\nschema-per-tenant", $tags="new_db")
+    ContainerDb(redis_latam, "Redis Cache", "Redis Cluster", "Региональный кеш", $tags="new_db")
+    Container(service_mesh_latam, "Service Mesh", "Istio", "mTLS, circuit breaker")
+    Container(network_policy_latam, "Network Policies", "Calico", "East-west фильтрация трафика")
+}
+
+' ============================================================
+' === CROSS-REGION INFRASTRUCTURE ===
+' ============================================================
+System_Boundary(cross_region, "Cross-Region Infrastructure") {
+    Container(mirrormaker, "MirrorMaker 2", "Kafka MirrorMaker 2", "Репликация выбранных топиков\nмежду регионами (аналитика,\nфрод-правила, конфигурация,\ntenant lifecycle)")
+    Container(pg_replication, "DB Replication Manager", "Logical Replication", "Кросс-региональная репликация\nглобальных данных (профили, правила,\nтенант-метаданные)")
+    Container(thanos, "Thanos", "Thanos / Mimir", "Глобальная агрегация метрик\nиз всех региональных Prometheus,\nкросс-тенантная аналитика")
+}
+
+' === OBSERVABILITY (per-region, shown once) ===
+System_Boundary(observability, "Observability Platform (per region)") {
+    Container(otel_collector, "OpenTelemetry Collector", "OTel Collector", "Централизованный сбор телеметрии:\nметрики, трейсы, логи от всех сервисов\n+ tenant_id label injection")
+    Container(prometheus, "Prometheus", "Monitoring", "Сбор и хранение метрик сервисов,\nKafka, Flink, Outbox\n+ tenant_id label на каждой метрике")
+    Container(grafana, "Grafana", "Visualization", "Дашборды: Kafka Overview, Consumer Lag,\nSaga Health, Event Flow, Flink Jobs,\nMulti-Region, Tenant Overview,\nOrganization-per-tenant")
+    Container(loki, "Loki", "Log Aggregation", "Централизованный сбор логов,\nmulti-tenancy mode (X-Scope-OrgID)")
+    Container(tempo, "Tempo", "Distributed Tracing", "Распределённая трассировка запросов\nи событий через correlation_id")
+    Container(alertmanager, "Alertmanager", "Alert System", "Алерты: consumer lag, DLQ,\nunder-replicated partitions, saga failures,\nregion health, tenant SLA violations")
+    Container(kafka_exporter, "Kafka Exporter", "Prometheus Exporter", "Экспорт метрик Kafka-брокеров\nи топиков в Prometheus")
+    Container(burrow, "Burrow", "Consumer Lag Monitor", "Мониторинг consumer lag,\nоценка статуса consumer groups")
+}
+
+' === CI/CD ===
+System_Boundary(cicd, "CI/CD Platform") {
+    Container(github_actions, "GitHub Actions", "CI/CD", "Сборка, тестирование,\nвалидация схем, публикация образов")
+    Container(argocd, "Argo CD", "GitOps", "Непрерывная доставка в Kubernetes\n(multi-cluster деплой)")
+    Container(helm, "Helm Charts", "Package Manager", "Шаблонизация деплоя сервисов")
+    Container(docker_registry, "Container Registry", "Docker Registry", "Хранение Docker-образов")
+}
+
+' === EXTERNAL SYSTEMS ===
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картографический сервис")
+System_Ext(fcm, "Firebase Cloud Messaging", "Push-уведомления Android")
+System_Ext(apns, "Apple Push Notification Service", "Push-уведомления iOS")
+System_Ext(huawei_push, "Huawei Push Kit", "Push-уведомления Huawei")
+System_Ext(bank_api, "Bank API", "Банковские выплаты водителям")
+System_Ext(local_payments_sea, "Local Payment Gateways (SEA)", "GrabPay, GoPay, OVO и др.")
+System_Ext(local_payments_latam, "Local Payment Gateways (LATAM)", "Mercado Pago, PIX и др.")
+System_Ext(local_maps_sea, "Local Map Providers (SEA)", "HERE Maps, Grab Maps")
+System_Ext(local_maps_latam, "Local Map Providers (LATAM)", "HERE Maps, Waze")
+System_Ext(partner_idp, "External Partner IdP", "Корпоративная система аутентификации\nпартнёра (SAML 2.0 / OIDC)", $tags="new")
+
+' ============================================================
+' === RELATIONSHIPS ===
+' ============================================================
+
+' === Users → Client Apps ===
+Rel(passenger, app_passenger, "Использует")
+Rel(driver, app_driver, "Использует")
+Rel(manager, web_portal, "Использует")
+Rel(accountant, admin_panel, "Использует")
+Rel(dev_engineer, github_actions, "Запускает пайплайны")
+Rel(sre_engineer, grafana, "Мониторит систему")
+Rel(partner_admin, partner_portal, "Управляет тенантом", $tags="new")
+Rel(partner_developer, api_gateway_cis, "Partner API (OAuth 2.0\nClient Credentials)", $tags="new")
+
+' === Client Apps → Global Edge Layer ===
+Rel(app_passenger, cloudflare_waf, "HTTPS-запросы", "HTTPS")
+Rel(app_driver, cloudflare_waf, "HTTPS-запросы", "HTTPS")
+Rel(web_portal, cloudflare_waf, "HTTPS-запросы", "HTTPS")
+Rel(admin_panel, cloudflare_waf, "HTTPS-запросы", "HTTPS")
+Rel(partner_portal, cloudflare_waf, "HTTPS-запросы", "HTTPS", $tags="new")
+
+' === Global Edge routing ===
+Rel(cloudflare_waf, cdn, "Статический контент", "Cache")
+Rel(cloudflare_waf, geodns, "API-запросы", "DNS Resolution")
+Rel(geodns, global_lb, "Определение ближайшего региона", "Latency-based routing")
+
+' === Global LB → Regional API Gateways ===
+Rel(global_lb, api_gateway_cis, "Трафик CIS", "HTTPS")
+Rel(global_lb, api_gateway_sea, "Трафик SEA", "HTTPS")
+Rel(global_lb, api_gateway_latam, "Трафик LATAM", "HTTPS")
+
+' === [NEW] API Gateway → Keycloak (JWT validation) ===
+Rel(api_gateway_cis, keycloak_cis, "JWT-валидация,\nOIDC Discovery", "OIDC/OAuth 2.0", $tags="new")
+
+' === [NEW] API Gateway → Multi-Tenant Platform ===
+Rel(api_gateway_cis, tenant_mgmt_svc_cis, "Управление тенантами", "REST", $tags="new")
+Rel(api_gateway_cis, onboarding_svc_cis, "Регистрация партнёра", "REST", $tags="new")
+
+' === CIS Region: API Gateway → Domain Services ===
+Rel(api_gateway_cis, booking_svc_cis, "Маршрутизация запросов\n+ X-Tenant-ID", "REST")
+Rel(api_gateway_cis, driver_svc_cis, "Маршрутизация запросов", "REST")
+Rel(api_gateway_cis, pricing_svc_cis, "Маршрутизация запросов", "REST")
+Rel(api_gateway_cis, payments_svc_cis, "Маршрутизация запросов", "REST")
+Rel(api_gateway_cis, geography_svc_cis, "Маршрутизация запросов", "REST")
+Rel(api_gateway_cis, analytics_svc_cis, "Маршрутизация запросов", "REST")
+Rel(api_gateway_cis, monolith_cis, "Немигрированные эндпоинты", "REST")
+
+' === CIS: Synchronous inter-service calls ===
+Rel(booking_svc_cis, pricing_svc_cis, "Расчёт стоимости", "REST")
+Rel(booking_svc_cis, geography_svc_cis, "Построение маршрута", "REST")
+Rel(payments_svc_cis, fraud_svc_cis, "Проверка транзакции", "REST")
+
+' === CIS: Services → Outbox → Debezium (CDC) ===
+Rel(booking_svc_cis, debezium_cis, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(driver_svc_cis, debezium_cis, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(payments_svc_cis, debezium_cis, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(fraud_svc_cis, debezium_cis, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(geography_svc_cis, debezium_cis, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(pricing_svc_cis, debezium_cis, "Outbox-таблица → CDC", "PostgreSQL WAL")
+
+' === CIS: Debezium → Kafka ===
+Rel(debezium_cis, kafka_cis, "Публикация доменных событий", "Kafka Producer")
+
+' === CIS: Kafka → Schema Registry ===
+Rel(kafka_cis, schema_registry_cis, "Валидация схем событий", "HTTP")
+
+' === CIS: Kafka → Consuming services (Choreography Saga) ===
+Rel(kafka_cis, booking_svc_cis, "Saga-события: DriverAssigned,\nPaymentAuthorized, FraudCheckPassed", "Kafka Consumer")
+Rel(kafka_cis, driver_svc_cis, "BookingCreated →\nназначение водителя", "Kafka Consumer")
+Rel(kafka_cis, pricing_svc_cis, "BookingCreated →\nрасчёт стоимости", "Kafka Consumer")
+Rel(kafka_cis, payments_svc_cis, "BookingConfirmed →\nавторизация платежа", "Kafka Consumer")
+Rel(kafka_cis, notification_svc_cis, "Все доменные события →\nуведомления пользователей", "Kafka Consumer")
+Rel(kafka_cis, analytics_svc_cis, "Все доменные события →\nreal-time аналитика", "Kafka Consumer")
+Rel(kafka_cis, fraud_svc_cis, "BookingCreated, PaymentInitiated →\nML-скоринг риска", "Kafka Consumer")
+
+' === [NEW] Kafka → Provisioning Workers (Tenant Lifecycle) ===
+Rel(kafka_cis, keycloak_provisioner_cis, "TenantApproved →\nпровижининг реалма", "Kafka Consumer", $tags="new")
+Rel(kafka_cis, db_provisioner_cis, "TenantApproved →\nсоздание схемы БД", "Kafka Consumer", $tags="new")
+Rel(kafka_cis, monitoring_provisioner_cis, "TenantApproved →\nнастройка мониторинга", "Kafka Consumer", $tags="new")
+Rel(kafka_cis, audit_svc_cis, "Аудит-события →\nзапись в хранилище", "Kafka Consumer", $tags="new")
+
+' === [NEW] Tenant Management → Kafka (lifecycle events) ===
+Rel(tenant_mgmt_svc_cis, kafka_cis, "TenantApproved, TenantDeactivated,\nаудит-события", "Kafka Producer", $tags="new")
+
+' === [NEW] Provisioning Workers → Kafka (completion events) ===
+Rel(keycloak_provisioner_cis, kafka_cis, "KeycloakProvisioningCompleted/Failed", "Kafka Producer", $tags="new")
+Rel(db_provisioner_cis, kafka_cis, "DatabaseProvisioningCompleted/Failed", "Kafka Producer", $tags="new")
+Rel(monitoring_provisioner_cis, kafka_cis, "MonitoringProvisioningCompleted/Failed", "Kafka Producer", $tags="new")
+
+' === [NEW] Kafka → Tenant Mgmt (aggregation of provisioning statuses) ===
+Rel(kafka_cis, tenant_mgmt_svc_cis, "Агрегация статусов\nпровижининга → ACTIVE", "Kafka Consumer", $tags="new")
+
+' === [NEW] Provisioners → Target Systems ===
+Rel(keycloak_provisioner_cis, keycloak_cis, "Создание реалма, ролей,\nклиентов, админ-пользователя", "Admin REST API", $tags="new")
+Rel(db_provisioner_cis, pg_primary_cis, "Создание схемы,\nAlembic-миграции, RLS", "SQL", $tags="new")
+Rel(monitoring_provisioner_cis, grafana, "Создание Organization,\nпровижининг дашбордов", "Grafana API", $tags="new")
+Rel(monitoring_provisioner_cis, prometheus, "Настройка recording rules\nс tenant_id фильтром", "Config API", $tags="new")
+
+' === [NEW] Keycloak → External Partner IdP ===
+Rel(keycloak_cis, partner_idp, "Федерация: Identity Brokering\nчерез SAML 2.0 / OIDC", "SAML/OIDC", $tags="new")
+
+' === [NEW] Tenant Management → Tenant Metadata DB ===
+Rel(tenant_mgmt_svc_cis, tenant_metadata_db_cis, "Метаданные тенантов,\nстатусы, квоты", "SQL", $tags="new")
+Rel(onboarding_svc_cis, tenant_mgmt_svc_cis, "Создание тенанта\nпосле валидации заявки", "REST", $tags="new")
+
+' === [NEW] Audit Service → Audit DB ===
+Rel(audit_svc_cis, audit_db_cis, "Запись аудит-логов", "HTTP/SQL", $tags="new")
+
+' === CIS: Kafka → Flink ===
+Rel(kafka_cis, flink_cis, "Потоки событий для\nreal-time обработки", "Kafka Consumer")
+Rel(flink_cis, kafka_cis, "Производные события:\nSurgeFactorUpdated, DemandForecast", "Kafka Producer")
+Rel(flink_cis, clickhouse_cis, "Агрегированная аналитика", "JDBC/HTTP")
+
+' === CIS: Retry / DLQ ===
+Rel(kafka_cis, retry_topics_cis, "Ошибочные сообщения →\nretry с экспоненциальной задержкой", "Kafka")
+Rel(retry_topics_cis, kafka_cis, "Повторная обработка\nпосле задержки", "Kafka")
+
+' === CIS: Services → External Systems ===
+Rel(payments_svc_cis, yandex_pay, "Обработка платежей", "REST API")
+Rel(payments_svc_cis, bank_api, "Банковские выплаты", "REST API")
+Rel(geography_svc_cis, yandex_maps, "Геоданные и маршруты", "REST API")
+Rel(notification_svc_cis, fcm, "Push Android", "REST API")
+Rel(notification_svc_cis, apns, "Push iOS", "REST API")
+Rel(notification_svc_cis, huawei_push, "Push Huawei", "REST API")
+
+' === CIS: Services → Shared Data ===
+Rel(geography_svc_cis, elasticsearch_cis, "Геопоиск водителей", "HTTP")
+Rel(pricing_svc_cis, redis_cache_cis, "Кеш ценовых правил\nи сурж-коэффициентов", "Redis Protocol")
+Rel(driver_svc_cis, redis_cache_cis, "Кеш локаций водителей\n(write-through)", "Redis Protocol")
+Rel(notification_svc_cis, redis_cache_cis, "Кеш токенов устройств", "Redis Protocol")
+Rel(analytics_svc_cis, clickhouse_cis, "Запись аналитики", "HTTP/Native")
+Rel(booking_svc_cis, redis_cache_cis, "Кеш статусов бронирований", "Redis Protocol")
+
+' === CIS: Legacy ACL ===
+Rel(acl_cis, monolith_cis, "Адаптация запросов\nк монолитной БД", "ORM/SQL")
+Rel(booking_svc_cis, acl_cis, "Данные в период миграции", "REST")
+
+' === SEA Region: Internal + External ===
+Rel(api_gateway_sea, keycloak_sea, "JWT-валидация", "OIDC", $tags="new")
+Rel(api_gateway_sea, services_sea, "Маршрутизация запросов", "REST")
+Rel(api_gateway_sea, tenant_platform_sea, "Tenant API", "REST", $tags="new")
+Rel(services_sea, kafka_sea, "Публикация / потребление событий", "Kafka")
+Rel(services_sea, pg_primary_sea, "Чтение / запись данных", "SQL")
+Rel(services_sea, redis_sea, "Кеширование", "Redis Protocol")
+Rel(services_sea, local_payments_sea, "Локальные платежи\n(GrabPay, GoPay, OVO)", "REST API")
+Rel(services_sea, local_maps_sea, "Геоданные и маршруты", "REST API")
+Rel(services_sea, fcm, "Push Android", "REST API")
+Rel(services_sea, apns, "Push iOS", "REST API")
+
+' === LATAM Region: Internal + External ===
+Rel(api_gateway_latam, keycloak_latam, "JWT-валидация", "OIDC", $tags="new")
+Rel(api_gateway_latam, services_latam, "Маршрутизация запросов", "REST")
+Rel(api_gateway_latam, tenant_platform_latam, "Tenant API", "REST", $tags="new")
+Rel(services_latam, kafka_latam, "Публикация / потребление событий", "Kafka")
+Rel(services_latam, pg_primary_latam, "Чтение / запись данных", "SQL")
+Rel(services_latam, redis_latam, "Кеширование", "Redis Protocol")
+Rel(services_latam, local_payments_latam, "Локальные платежи\n(Mercado Pago, PIX)", "REST API")
+Rel(services_latam, local_maps_latam, "Геоданные и маршруты", "REST API")
+Rel(services_latam, fcm, "Push Android", "REST API")
+Rel(services_latam, apns, "Push iOS", "REST API")
+
+' === CROSS-REGION: MirrorMaker 2 ===
+Rel(mirrormaker, kafka_cis, "Репликация: analytics, fraud-rules,\npricing-rules, tenant-lifecycle", "Kafka")
+Rel(mirrormaker, kafka_sea, "Репликация: analytics, fraud-rules,\npricing-rules, tenant-lifecycle", "Kafka")
+Rel(mirrormaker, kafka_latam, "Репликация: analytics, fraud-rules,\npricing-rules, tenant-lifecycle", "Kafka")
+
+' === CROSS-REGION: DB Replication ===
+Rel(pg_replication, pg_primary_cis, "Логическая репликация\nглобальных данных + tenant metadata", "PostgreSQL Logical")
+Rel(pg_replication, pg_primary_sea, "Логическая репликация\nглобальных данных + tenant metadata", "PostgreSQL Logical")
+Rel(pg_replication, pg_primary_latam, "Логическая репликация\nглобальных данных + tenant metadata", "PostgreSQL Logical")
+
+' === CROSS-REGION: Thanos ===
+Rel(thanos, prometheus, "Агрегация метрик\nиз всех регионов,\nкросс-тенантная аналитика", "Thanos Sidecar")
+
+' === CIS: Observability: Services → OTel Collector ===
+Rel(booking_svc_cis, otel_collector, "Метрики, трейсы, логи\n+ tenant_id", "OTLP")
+Rel(driver_svc_cis, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(pricing_svc_cis, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(payments_svc_cis, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(notification_svc_cis, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(fraud_svc_cis, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(flink_cis, otel_collector, "Метрики джобов Flink", "OTLP")
+Rel(tenant_mgmt_svc_cis, otel_collector, "Метрики, трейсы, логи", "OTLP", $tags="new")
+Rel(keycloak_cis, otel_collector, "Метрики IAM: логины,\nтокены, ошибки авторизации", "OTLP", $tags="new")
+
+' === OTel Collector → backends ===
+Rel(otel_collector, prometheus, "Метрики", "Remote Write")
+Rel(otel_collector, tempo, "Трейсы", "OTLP")
+Rel(otel_collector, loki, "Логи", "Loki API")
+
+' === Kafka monitoring ===
+Rel(kafka_exporter, kafka_cis, "Сбор метрик брокеров\nи топиков", "JMX/Kafka API")
+Rel(kafka_exporter, prometheus, "Экспорт метрик Kafka", "Prometheus Scrape")
+Rel(burrow, kafka_cis, "Мониторинг consumer lag\nи статуса consumer groups", "Kafka API")
+Rel(burrow, prometheus, "Экспорт метрик lag", "Prometheus Scrape")
+
+' === Observability internal ===
+Rel(prometheus, grafana, "Визуализация метрик", "PromQL")
+Rel(loki, grafana, "Визуализация логов", "LogQL")
+Rel(tempo, grafana, "Визуализация трейсов", "Tempo API")
+Rel(prometheus, alertmanager, "Правила алертов", "Alert Rules")
+Rel(alertmanager, sre_engineer, "Уведомления об инцидентах", "Slack/PagerDuty")
+
+' === [NEW] Grafana → Partner Admin (tenant-scoped dashboards) ===
+Rel(grafana, partner_admin, "Партнёрские дашборды\n(Organization-per-tenant)", "Web UI", $tags="new")
+
+' === CI/CD ===
+Rel(github_actions, docker_registry, "Публикация образов", "Docker Push")
+Rel(github_actions, schema_registry_cis, "Валидация совместимости\nсхем событий", "HTTP")
+Rel(argocd, helm, "Multi-cluster деплой\nво все регионы", "Helm Install")
+Rel(github_actions, argocd, "Триггер деплоя", "GitOps Sync")
+
+' === Analytics BI ===
+Rel(clickhouse_cis, grafana, "Бизнес-дашборды,\nаудит-отчёты", "SQL")
+Rel(grafana, manager, "Бизнес-отчёты", "Web UI")
+Rel(grafana, accountant, "Финансовые отчёты", "Web UI")
+
+@enduml

@@ -1,0 +1,163 @@
+@startuml C3_IAM_Onboarding_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title GoFuture — C3 Component Diagram (IAM & Partner Onboarding)
+
+' === ACTORS ===
+Person(partner_applicant, "Заявитель-партнёр", "Подаёт заявку на подключение\nк платформе GoFuture")
+Person(onboarding_mgr, "Менеджер онбординга", "Рассматривает и одобряет\nзаявки партнёров (platform_onboarding_mgr)")
+Person(partner_admin, "Администратор партнёра", "Получает доступ к тенанту\nпосле успешного провижининга")
+
+' === EXTERNAL SYSTEMS (simplified) ===
+System_Ext(api_gateway, "API Gateway", "Kong / NGINX Ingress\nJWT-валидация, X-Tenant-ID")
+ContainerQueue_Ext(kafka, "Event Bus", "Apache Kafka\n(региональный кластер)")
+ContainerDb_Ext(pg_domain, "Domain PostgreSQL", "Patroni + PostgreSQL\n(база доменных сервисов)")
+System_Ext(grafana_ext, "Grafana", "Визуализация метрик и логов")
+System_Ext(prometheus_ext, "Prometheus", "Сбор и хранение метрик")
+System_Ext(notification_svc, "Notification Service", "Push/Email/SMS уведомления")
+System_Ext(partner_idp, "External Partner IdP", "Корпоративный IdP партнёра\n(SAML 2.0 / OIDC)")
+
+' ============================================================
+' === KEYCLOAK IAM ===
+' ============================================================
+Container_Boundary(keycloak_boundary, "Keycloak IAM (Identity & Access Management)") {
+    Component(master_realm, "Master Realm", "Keycloak Realm", "Реалм платформы GoFuture:\nроли platform_admin, platform_sre,\nplatform_analyst, platform_onboarding_mgr")
+    Component(partner_realm_template, "Partner Realm Template", "Keycloak Realm Template", "Шаблон реалма партнёра:\nпредустановленные роли, клиенты,\nscopes, mappers для JWT claims")
+    Component(partner_realms, "Partner Realms (N)", "Keycloak Realms", "N экземпляров реалмов партнёров,\nкаждый — изолированная среда SSO\nс ролями: partner_admin, partner_operator,\npartner_analyst, partner_finance,\npartner_developer, driver, passenger")
+    Component(oidc_provider, "OIDC Provider", "OpenID Connect", "Эндпоинты: /auth, /token,\n/userinfo, /certs,\n/.well-known/openid-configuration")
+    Component(token_service, "Token Service", "JWT", "Генерация JWT с claims:\nsub, realm, tenant_id, roles,\npermissions, region, exp")
+    Component(user_federation, "User Federation", "LDAP / SAML / OIDC Broker", "Федерация с внешними IdP партнёров\nчерез Identity Brokering")
+    Component(admin_api, "Admin REST API", "Keycloak Admin API", "Программное управление реалмами,\nролями, пользователями, клиентами")
+}
+
+' ============================================================
+' === TENANT MANAGEMENT SERVICE ===
+' ============================================================
+Container_Boundary(tenant_mgmt_boundary, "Tenant Management Service (FastAPI)") {
+    Component(tenant_api, "Tenant REST API", "FastAPI Router", "CRUD тенантов, получение статусов,\nуправление конфигурацией тенанта,\nдоступ: platform_admin, partner_admin")
+    Component(tenant_repository, "Tenant Repository", "SQLAlchemy + PostgreSQL", "Хранение метаданных тенантов:\nname, region, plan_tier, status,\ncontact_info, quotas, created_at")
+    Component(tenant_event_publisher, "Event Publisher", "aiokafka Producer", "Публикация lifecycle-событий:\nTenantApproved, TenantDeactivated,\nTenantConfigUpdated + Outbox Pattern")
+    Component(provisioning_aggregator, "Provisioning Aggregator", "aiokafka Consumer", "Потребление событий провижининга\nот 3 воркеров, агрегация статусов:\nвсе 3 completed → tenant.status = ACTIVE")
+    Component(quota_manager, "Quota Manager", "Business Logic", "Управление лимитами тенантов:\nmax_drivers, max_bookings/day,\nAPI rate limits, storage quotas")
+    Component(tenant_config, "Tenant Configuration", "Business Logic", "Feature flags, plan limits,\nрегиональные настройки,\nкастомизация функциональности")
+    ComponentDb(tenant_metadata_db, "Tenant Metadata DB", "PostgreSQL", "Таблицы: tenants, tenant_quotas,\ntenant_configs, provisioning_status,\nonboarding_applications")
+}
+
+' ============================================================
+' === PARTNER ONBOARDING SERVICE ===
+' ============================================================
+Container_Boundary(onboarding_boundary, "Partner Onboarding Service (FastAPI)") {
+    Component(registration_api, "Registration API", "FastAPI Router", "Приём заявок на регистрацию:\ncompany_name, region, plan_tier,\ncontact_email, legal_entity_info")
+    Component(validation_engine, "Validation Engine", "Business Logic", "Проверка: дубликаты по ИНН/email,\nсоответствие региональным требованиям,\nполнота документов, санкционные списки")
+    Component(approval_workflow, "Approval Workflow", "State Machine", "Автоматическое одобрение (Standard plan)\nили ручной review (Enterprise plan).\nСтатусы: PENDING → APPROVED / REJECTED")
+}
+
+' ============================================================
+' === PROVISIONING WORKERS ===
+' ============================================================
+Container_Boundary(keycloak_prov_boundary, "Keycloak Provisioner (FastAPI Worker)") {
+    Component(realm_creator, "Realm Creator", "Keycloak Admin Client", "Создание реалма из шаблона,\nнастройка token lifetimes,\nbrute-force protection")
+    Component(role_mapper, "Role Mapper", "Keycloak Admin Client", "Создание ролей: partner_admin,\npartner_operator, partner_analyst,\npartner_finance, partner_developer,\ndriver, passenger")
+    Component(admin_user_creator, "Admin User Creator", "Keycloak Admin Client", "Создание учётной записи\npartner_admin с временным паролем,\nотправка приглашения")
+    Component(client_creator, "OAuth Client Creator", "Keycloak Admin Client", "Создание OAuth 2.0 клиентов:\nPartner Portal (Authorization Code + PKCE),\nPartner API (Client Credentials)")
+}
+
+Container_Boundary(db_prov_boundary, "Database Provisioner (FastAPI Worker)") {
+    Component(schema_creator, "Schema Creator", "SQLAlchemy + psycopg2", "Создание PostgreSQL-схемы:\nCREATE SCHEMA tenant_{tenant_id},\nустановка search_path")
+    Component(migration_runner, "Migration Runner", "Alembic", "Запуск миграций внутри\nновой схемы тенанта:\nтаблицы bookings, drivers,\npayments, notifications и др.")
+    Component(rls_policy_setup, "RLS Policy Setup", "SQL DDL", "Настройка Row-Level Security:\nCREATE POLICY tenant_isolation\nON ALL TABLES\nUSING (tenant_id = current_setting('app.tenant_id'))")
+}
+
+Container_Boundary(monitoring_prov_boundary, "Monitoring Provisioner (FastAPI Worker)") {
+    Component(grafana_org_creator, "Grafana Org Creator", "Grafana HTTP API", "Создание Organization в Grafana\nдля партнёра с изолированным\nпространством дашбордов")
+    Component(dashboard_provisioner, "Dashboard Provisioner", "Grafana HTTP API", "Провижининг дашбордов из шаблонов:\nPartner Overview, Bookings,\nDrivers, Payments, SLA Compliance")
+    Component(recording_rule_gen, "Recording Rule Generator", "Prometheus Config", "Генерация Prometheus recording rules\nс фильтром tenant_id для агрегации\nметрик конкретного тенанта")
+    Component(loki_tenant_setup, "Loki Tenant Setup", "Loki Config", "Настройка X-Scope-OrgID\nдля изоляции логов тенанта\nв multi-tenant режиме Loki")
+}
+
+' ============================================================
+' === RELATIONSHIPS — ONBOARDING FLOW (numbered) ===
+' ============================================================
+
+' 1. Partner submits registration
+Rel(partner_applicant, registration_api, "1. Подача заявки\nна регистрацию", "HTTPS")
+
+' 2. Validation
+Rel(registration_api, validation_engine, "2. Валидация данных\nзаявки", "Internal")
+
+' 3. Create tenant record (PENDING)
+Rel(validation_engine, tenant_api, "3. Создание тенанта\n(status: PENDING_APPROVAL)", "REST")
+Rel(tenant_api, tenant_repository, "Сохранение", "Internal")
+Rel(tenant_repository, tenant_metadata_db, "INSERT tenant", "SQL")
+
+' 4. Approval workflow
+Rel(onboarding_mgr, approval_workflow, "4a. Ручной review\n(Enterprise план)", "Web UI")
+Rel(validation_engine, approval_workflow, "4b. Авто-одобрение\n(Standard план)", "Internal")
+
+' 5. Publish TenantApproved event
+Rel(approval_workflow, tenant_event_publisher, "5. Одобрение → публикация\nсобытия TenantApproved", "Internal")
+Rel(tenant_event_publisher, kafka, "TenantApproved\n{tenant_id, region, plan_tier}", "Kafka Producer")
+
+' 6-7. Provisioning workers consume events (parallel)
+Rel(kafka, realm_creator, "6a. Провижининг\nKeycloak реалма", "Kafka Consumer")
+Rel(kafka, schema_creator, "6b. Провижининг\nбазы данных", "Kafka Consumer")
+Rel(kafka, grafana_org_creator, "6c. Провижининг\nмониторинга", "Kafka Consumer")
+
+' Keycloak Provisioner internal flow
+Rel(realm_creator, partner_realm_template, "Клонирование шаблона", "Admin API")
+Rel(realm_creator, role_mapper, "Создание ролей", "Internal")
+Rel(role_mapper, admin_user_creator, "Создание админа", "Internal")
+Rel(admin_user_creator, client_creator, "Создание OAuth-клиентов", "Internal")
+Rel(realm_creator, admin_api, "Программное управление", "REST")
+Rel(client_creator, partner_realms, "Новый реалм партнёра", "Admin API")
+
+' DB Provisioner internal flow
+Rel(schema_creator, migration_runner, "Запуск миграций", "Internal")
+Rel(migration_runner, rls_policy_setup, "Настройка RLS", "Internal")
+Rel(schema_creator, pg_domain, "CREATE SCHEMA\ntenant_{tenant_id}", "SQL")
+
+' Monitoring Provisioner internal flow
+Rel(grafana_org_creator, dashboard_provisioner, "Провижининг дашбордов", "Internal")
+Rel(dashboard_provisioner, recording_rule_gen, "Генерация recording rules", "Internal")
+Rel(recording_rule_gen, loki_tenant_setup, "Настройка Loki tenant", "Internal")
+Rel(grafana_org_creator, grafana_ext, "Создание Organization\n+ дашборды", "Grafana API")
+Rel(recording_rule_gen, prometheus_ext, "Recording rules\nс tenant_id", "Config API")
+
+' 8. Provisioners emit completion events
+Rel(client_creator, kafka, "7a. KeycloakProvisioning\nCompleted", "Kafka Producer")
+Rel(rls_policy_setup, kafka, "7b. DatabaseProvisioning\nCompleted", "Kafka Producer")
+Rel(loki_tenant_setup, kafka, "7c. MonitoringProvisioning\nCompleted", "Kafka Producer")
+
+' 9. Aggregation
+Rel(kafka, provisioning_aggregator, "8. Агрегация 3/3\nстатусов провижининга", "Kafka Consumer")
+Rel(provisioning_aggregator, tenant_repository, "9. Status → ACTIVE", "Internal")
+Rel(tenant_repository, tenant_metadata_db, "UPDATE tenant SET\nstatus = 'ACTIVE'", "SQL")
+
+' 10. Notification
+Rel(provisioning_aggregator, kafka, "10. TenantActivated\n→ приветственное уведомление", "Kafka Producer")
+Rel(kafka, notification_svc, "Welcome email\nс URL и credentials", "Kafka Consumer")
+
+' 11. Partner admin gets access
+Rel(partner_admin, api_gateway, "11. Первый вход\nчерез Partner Portal", "HTTPS")
+Rel(api_gateway, oidc_provider, "OIDC Authorization\nCode + PKCE", "OIDC")
+Rel(oidc_provider, token_service, "Генерация JWT\n{tenant_id, roles}", "Internal")
+
+' === Cross-cutting: Tenant Management internals ===
+Rel(tenant_api, quota_manager, "Проверка квот", "Internal")
+Rel(tenant_api, tenant_config, "Чтение/запись\nконфигурации", "Internal")
+Rel(quota_manager, tenant_metadata_db, "Лимиты тенанта", "SQL")
+Rel(tenant_config, tenant_metadata_db, "Feature flags", "SQL")
+
+' === Federation ===
+Rel(user_federation, partner_idp, "Identity Brokering:\nSAML 2.0 / OIDC", "SAML/OIDC")
+Rel(partner_realms, user_federation, "Федерация с внешним\nIdP партнёра", "Internal")
+
+' === Master Realm ===
+Rel(master_realm, oidc_provider, "OIDC для платформенных\nпользователей", "Internal")
+Rel(partner_realms, oidc_provider, "OIDC для пользователей\nпартнёра", "Internal")
+Rel(master_realm, token_service, "JWT: platform_admin,\nplatform_sre, etc.", "Internal")
+Rel(partner_realms, token_service, "JWT: partner_admin,\ndriver, passenger, etc.", "Internal")
+
+@enduml
