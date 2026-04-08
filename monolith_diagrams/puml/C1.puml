@@ -1,0 +1,30 @@
+@startuml Context_Diagram_With_Payouts
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+Person(passenger, "Пассажир", "Заказывает, отслеживает и оплачивает поездки")
+Person(driver, "Водитель", "Принимает заказы, управляет поездками\nи получает выплаты") 
+Person(manager, "Корпоративный менеджер", "Управляет корпоративными поездками и счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты водителям")
+
+System(go_future, "GoFuture Monolithic Platform", "Такси-агрегатор: монолитное приложение")
+
+System_Ext(yandex_pay, "Яндекс Пэй", "Обрабатывает платёжные транзакции")
+System_Ext(yandex_maps, "Яндекс Карты", "Предоставляет геоданные и маршруты")
+System_Ext(fcm, "Firebase Cloud Messaging", "Отправляет уведомления для iOS/Android")
+System_Ext(apns, "Apple Push Notification Service", "Отправляет уведомления для iOS")
+System_Ext(huawei_push, "Huawei Push Kit", "Отправляет уведомления для Huawei devices")
+System_Ext(bank_api, "API Банка", "Обрабатывает банковские выплаты")
+
+Rel(passenger, go_future, "Использует для заказа поездок")
+Rel(driver, go_future, "Использует для работы и получения выплат")
+Rel(manager, go_future, "Использует для управления счетами")
+Rel(accountant, go_future, "Контролирует выплаты через")
+
+Rel(go_future, yandex_pay, "Обрабатывает платежи через")
+Rel(go_future, yandex_maps, "Запрашивает геоданные через")
+Rel(go_future, fcm, "Отправляет уведомления через")
+Rel(go_future, apns, "Отправляет уведомления через")
+Rel(go_future, huawei_push, "Отправляет уведомления через")
+Rel(go_future, bank_api, "Инициирует выплаты через")
+
+@enduml

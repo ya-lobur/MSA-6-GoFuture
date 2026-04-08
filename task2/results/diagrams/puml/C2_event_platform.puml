@@ -1,0 +1,211 @@
+@startuml C2_EventDriven_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title GoFuture — C2 Container Diagram (Event-Driven Architecture)
+
+' === ACTORS ===
+Person(passenger, "Пассажир", "Заказывает, отслеживает и оплачивает поездки")
+Person(driver, "Водитель", "Принимает заказы, управляет поездками\nи получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет корпоративными поездками и счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты водителям")
+Person(dev_engineer, "Разработчик", "Разрабатывает и деплоит сервисы")
+Person(sre_engineer, "SRE-инженер", "Мониторит и поддерживает систему")
+
+' === CLIENT APPS ===
+System_Boundary(clients, "Client Applications") {
+    Container(app_passenger, "Passenger App", "iOS/Android/Huawei", "Мобильное приложение пассажира")
+    Container(app_driver, "Driver App", "iOS/Android/Huawei", "Мобильное приложение водителя")
+    Container(web_portal, "Corporate Web Portal", "React/Vue.js", "Веб-портал корпоративных клиентов")
+    Container(admin_panel, "Admin Panel", "React/Vue.js", "Панель администрирования и управления выплатами")
+}
+
+' === API GATEWAY ===
+System_Boundary(edge_layer, "Edge Layer") {
+    Container(api_gateway, "API Gateway", "Kong / NGINX Ingress", "Маршрутизация запросов, rate limiting,\nаутентификация, Strangler Fig роутинг")
+}
+
+' === DOMAIN SERVICES ===
+System_Boundary(domain_services, "Domain Microservices") {
+    Container(booking_svc, "Booking Service", "FastAPI + PostgreSQL", "Жизненный цикл поездки, координация Saga,\nстатус бронирования, Outbox-таблица")
+    Container(driver_svc, "Driver Service", "FastAPI + PostgreSQL + Redis", "Профили водителей, доступность,\nGPS-отслеживание, Outbox-таблица")
+    Container(pricing_svc, "Pricing Service", "FastAPI + PostgreSQL + Redis", "Динамическое ценообразование,\nсурж-коэффициенты, расчёт стоимости")
+    Container(payments_svc, "Payments Service", "FastAPI + PostgreSQL", "Обработка платежей, авторизация\nсредств, выплаты водителям, Outbox-таблица")
+    Container(notification_svc, "Notification Service", "FastAPI + PostgreSQL + Redis", "Push-уведомления для всех платформ,\nevent-driven потребитель")
+    Container(geography_svc, "Geography Service", "FastAPI + Elasticsearch + Redis", "Геопоиск водителей, маршрутизация,\nуправление зонами, Outbox-таблица")
+    Container(analytics_svc, "Analytics Service", "FastAPI + ClickHouse + Kafka", "Real-time аналитика, агрегация событий,\nбизнес-отчёты, ML-пайплайны")
+    Container(fraud_svc, "Fraud Service", "FastAPI + PostgreSQL", "ML-скоринг риска, фрод-детекция,\nOutbox-таблица")
+}
+
+' === LEGACY MONOLITH (transitional) ===
+System_Boundary(legacy_layer, "Legacy (Transitional)") {
+    Container(monolith, "GoFuture Monolith", "Django Application", "Остаточная бизнес-логика\n(постепенно выводится из эксплуатации)")
+    Container(acl, "Anti-Corruption Layer", "FastAPI Adapter", "Адаптер между новыми сервисами\nи монолитной БД на период миграции")
+}
+
+' === EVENT PLATFORM (expanded) ===
+System_Boundary(event_platform, "Event Platform") {
+    ContainerQueue(kafka, "Event Bus", "Apache Kafka", "Центральный брокер событий,\nрегиональное партиционирование")
+    Container(schema_registry, "Schema Registry", "Confluent Schema Registry", "Управление схемами событий\n(Avro/Protobuf), контроль совместимости")
+    Container(debezium, "Outbox Relay", "Debezium CDC", "Захват изменений из Outbox-таблиц\nсервисов через PostgreSQL WAL")
+    Container(flink, "Stream Processing", "Apache Flink", "Потоковая обработка: сурж-прайсинг,\nфрод-скоринг, аналитика, матчинг")
+    ContainerQueue(retry_topics, "Retry / DLQ Topics", "Apache Kafka", "Повторная обработка с экспоненциальной\nзадержкой и Dead Letter Queue")
+}
+
+' === DATA STORES ===
+System_Boundary(data_stores, "Shared Data Infrastructure") {
+    ContainerDb(redis_cache, "Distributed Cache", "Redis Cluster", "Кеширование данных, сессии,\nrate limiting, локации водителей")
+    ContainerDb(elasticsearch, "Search Engine", "Elasticsearch / OpenSearch", "Геопоиск водителей,\nполнотекстовый поиск")
+    ContainerDb(clickhouse, "Analytics DB", "ClickHouse", "Хранение аналитических данных,\nметрик бизнеса, ML-фичи")
+}
+
+' === OBSERVABILITY (expanded) ===
+System_Boundary(observability, "Observability Platform") {
+    Container(otel_collector, "OpenTelemetry Collector", "OTel Collector", "Централизованный сбор телеметрии:\nметрики, трейсы, логи от всех сервисов")
+    Container(prometheus, "Prometheus", "Monitoring", "Сбор и хранение метрик сервисов,\nKafka, Flink, Outbox")
+    Container(grafana, "Grafana", "Visualization", "Дашборды: Kafka Overview, Consumer Lag,\nSaga Health, Event Flow, Flink Jobs")
+    Container(loki, "Loki", "Log Aggregation", "Централизованный сбор логов")
+    Container(tempo, "Tempo", "Distributed Tracing", "Распределённая трассировка запросов\nи событий через correlation_id")
+    Container(alertmanager, "Alertmanager", "Alert System", "Алерты: consumer lag, DLQ,\nunder-replicated partitions, saga failures")
+    Container(kafka_exporter, "Kafka Exporter", "Prometheus Exporter", "Экспорт метрик Kafka-брокеров\nи топиков в Prometheus")
+    Container(burrow, "Burrow", "Consumer Lag Monitor", "Мониторинг consumer lag,\nоценка статуса consumer groups")
+}
+
+' === CI/CD ===
+System_Boundary(cicd, "CI/CD Platform") {
+    Container(github_actions, "GitHub Actions", "CI/CD", "Сборка, тестирование,\nвалидация схем, публикация образов")
+    Container(argocd, "Argo CD", "GitOps", "Непрерывная доставка в Kubernetes")
+    Container(helm, "Helm Charts", "Package Manager", "Шаблонизация деплоя сервисов")
+    Container(docker_registry, "Container Registry", "Docker Registry", "Хранение Docker-образов")
+}
+
+' === EXTERNAL SYSTEMS ===
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картографический сервис")
+System_Ext(fcm, "Firebase Cloud Messaging", "Push-уведомления Android")
+System_Ext(apns, "Apple Push Notification Service", "Push-уведомления iOS")
+System_Ext(huawei_push, "Huawei Push Kit", "Push-уведомления Huawei")
+System_Ext(bank_api, "Bank API", "Банковские выплаты водителям")
+
+' === RELATIONSHIPS: Users → Client Apps ===
+Rel(passenger, app_passenger, "Использует")
+Rel(driver, app_driver, "Использует")
+Rel(manager, web_portal, "Использует")
+Rel(accountant, admin_panel, "Использует")
+Rel(dev_engineer, github_actions, "Запускает пайплайны")
+Rel(sre_engineer, grafana, "Мониторит систему")
+
+' === Client Apps → API Gateway ===
+Rel(app_passenger, api_gateway, "REST API", "HTTPS")
+Rel(app_driver, api_gateway, "REST API", "HTTPS")
+Rel(web_portal, api_gateway, "REST API", "HTTPS")
+Rel(admin_panel, api_gateway, "REST API", "HTTPS")
+
+' === API Gateway → Services ===
+Rel(api_gateway, booking_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, driver_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, pricing_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, payments_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, geography_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, analytics_svc, "Маршрутизация запросов", "REST")
+Rel(api_gateway, monolith, "Немигрированные эндпоинты", "REST")
+
+' === Synchronous inter-service calls ===
+Rel(booking_svc, pricing_svc, "Расчёт стоимости", "REST")
+Rel(booking_svc, geography_svc, "Построение маршрута", "REST")
+Rel(payments_svc, fraud_svc, "Проверка транзакции", "REST")
+
+' === Services → Outbox → Debezium (CDC) ===
+Rel(booking_svc, debezium, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(driver_svc, debezium, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(payments_svc, debezium, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(fraud_svc, debezium, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(geography_svc, debezium, "Outbox-таблица → CDC", "PostgreSQL WAL")
+Rel(pricing_svc, debezium, "Outbox-таблица → CDC", "PostgreSQL WAL")
+
+' === Debezium → Kafka ===
+Rel(debezium, kafka, "Публикация доменных событий", "Kafka Producer")
+
+' === Kafka → Schema Registry ===
+Rel(kafka, schema_registry, "Валидация схем событий", "HTTP")
+
+' === Kafka → Consuming services (Choreography Saga) ===
+Rel(kafka, booking_svc, "Saga-события: DriverAssigned,\nPaymentAuthorized, FraudCheckPassed", "Kafka Consumer")
+Rel(kafka, driver_svc, "BookingCreated →\nназначение водителя", "Kafka Consumer")
+Rel(kafka, pricing_svc, "BookingCreated →\nрасчёт стоимости", "Kafka Consumer")
+Rel(kafka, payments_svc, "BookingConfirmed →\nавторизация платежа", "Kafka Consumer")
+Rel(kafka, notification_svc, "Все доменные события →\nуведомления пользователей", "Kafka Consumer")
+Rel(kafka, analytics_svc, "Все доменные события →\nreal-time аналитика", "Kafka Consumer")
+Rel(kafka, fraud_svc, "BookingCreated, PaymentInitiated →\nML-скоринг риска", "Kafka Consumer")
+
+' === Kafka → Flink (Stream Processing) ===
+Rel(kafka, flink, "Потоки событий для\nreal-time обработки", "Kafka Consumer")
+
+' === Flink → outputs ===
+Rel(flink, kafka, "Производные события:\nSurgeFactorUpdated, DemandForecast", "Kafka Producer")
+Rel(flink, clickhouse, "Агрегированная аналитика", "JDBC/HTTP")
+
+' === Retry / DLQ ===
+Rel(kafka, retry_topics, "Ошибочные сообщения →\nretry с экспоненциальной задержкой", "Kafka")
+Rel(retry_topics, kafka, "Повторная обработка\nпосле задержки", "Kafka")
+
+' === Services → External Systems ===
+Rel(payments_svc, yandex_pay, "Обработка платежей", "REST API")
+Rel(payments_svc, bank_api, "Банковские выплаты", "REST API")
+Rel(geography_svc, yandex_maps, "Геоданные и маршруты", "REST API")
+Rel(notification_svc, fcm, "Push Android", "REST API")
+Rel(notification_svc, apns, "Push iOS", "REST API")
+Rel(notification_svc, huawei_push, "Push Huawei", "REST API")
+
+' === Services → Shared Data ===
+Rel(geography_svc, elasticsearch, "Геопоиск водителей", "HTTP")
+Rel(pricing_svc, redis_cache, "Кеш ценовых правил\nи сурж-коэффициентов", "Redis Protocol")
+Rel(driver_svc, redis_cache, "Кеш локаций водителей\n(write-through)", "Redis Protocol")
+Rel(notification_svc, redis_cache, "Кеш токенов устройств", "Redis Protocol")
+Rel(analytics_svc, clickhouse, "Запись аналитики", "HTTP/Native")
+Rel(booking_svc, redis_cache, "Кеш статусов бронирований", "Redis Protocol")
+
+' === Legacy ACL ===
+Rel(acl, monolith, "Адаптация запросов\nк монолитной БД", "ORM/SQL")
+Rel(booking_svc, acl, "Данные в период миграции", "REST")
+
+' === Observability: Services → OTel Collector ===
+Rel(booking_svc, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(driver_svc, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(pricing_svc, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(payments_svc, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(notification_svc, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(fraud_svc, otel_collector, "Метрики, трейсы, логи", "OTLP")
+Rel(flink, otel_collector, "Метрики джобов Flink", "OTLP")
+
+' === OTel Collector → backends ===
+Rel(otel_collector, prometheus, "Метрики", "Remote Write")
+Rel(otel_collector, tempo, "Трейсы", "OTLP")
+Rel(otel_collector, loki, "Логи", "Loki API")
+
+' === Kafka monitoring ===
+Rel(kafka_exporter, kafka, "Сбор метрик брокеров\nи топиков", "JMX/Kafka API")
+Rel(kafka_exporter, prometheus, "Экспорт метрик Kafka", "Prometheus Scrape")
+Rel(burrow, kafka, "Мониторинг consumer lag\nи статуса consumer groups", "Kafka API")
+Rel(burrow, prometheus, "Экспорт метрик lag", "Prometheus Scrape")
+
+' === Observability internal ===
+Rel(prometheus, grafana, "Визуализация метрик", "PromQL")
+Rel(loki, grafana, "Визуализация логов", "LogQL")
+Rel(tempo, grafana, "Визуализация трейсов", "Tempo API")
+Rel(prometheus, alertmanager, "Правила алертов", "Alert Rules")
+Rel(alertmanager, sre_engineer, "Уведомления об инцидентах", "Slack/PagerDuty")
+
+' === CI/CD ===
+Rel(github_actions, docker_registry, "Публикация образов", "Docker Push")
+Rel(github_actions, schema_registry, "Валидация совместимости\nсхем событий", "HTTP")
+Rel(argocd, helm, "Деплой сервисов", "Helm Install")
+Rel(github_actions, argocd, "Триггер деплоя", "GitOps Sync")
+
+' === Analytics BI ===
+Rel(clickhouse, grafana, "Бизнес-дашборды", "SQL")
+Rel(grafana, manager, "Бизнес-отчёты", "Web UI")
+Rel(grafana, accountant, "Финансовые отчёты", "Web UI")
+
+@enduml

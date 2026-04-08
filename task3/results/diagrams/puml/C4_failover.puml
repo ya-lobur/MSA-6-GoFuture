@@ -1,0 +1,131 @@
+@startuml C4_Failover_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Deployment.puml
+
+LAYOUT_WITH_LEGEND()
+
+title GoFuture — C4 Deployment Diagram: Failover & Failure Points
+
+' === TAGS: failure points (red) and recovery (green) ===
+AddElementTag("failure", $bgColor="#ff4444", $fontColor="white", $borderColor="#cc0000")
+AddElementTag("recovery", $bgColor="#28a745", $fontColor="white", $borderColor="#1e7e34")
+AddElementTag("global", $bgColor="#6f42c1", $fontColor="white", $borderColor="#59359a")
+AddRelTag("failover", $textColor="#28a745", $lineColor="#28a745", $lineStyle="dashed")
+AddRelTag("replication", $textColor="#0066cc", $lineColor="#0066cc")
+AddRelTag("traffic", $textColor="#333333", $lineColor="#333333")
+
+' ============================================================
+' === GLOBAL LAYER ===
+' ============================================================
+Deployment_Node(global_layer, "Global Layer", "Cloudflare + DNS") {
+    Deployment_Node(cloudflare, "Cloudflare Edge", "Anycast Network, 300+ PoPs") {
+        Container(waf, "WAF / DDoS Protection", "Cloudflare WAF", "[FP9] Защита от DDoS-атак\nи вредоносного трафика", $tags="global")
+        Container(geodns, "GeoDNS", "Cloudflare DNS", "[FP10] Latency-based routing\nк ближайшему региону, TTL=30s", $tags="global")
+        Container(global_lb, "Global Load Balancer", "Cloudflare LB", "Health checks каждые 10s,\nfailover при 3 неудачных проверках", $tags="global")
+        Container(health_checker, "Health Checker", "Cloudflare Health Checks", "Мониторинг доступности\nрегиональных эндпоинтов", $tags="recovery")
+    }
+}
+
+' ============================================================
+' === REGION: CIS (Moscow, Yandex Cloud) ===
+' ============================================================
+Deployment_Node(region_cis, "Region: CIS", "Moscow, Yandex Cloud") {
+
+    Deployment_Node(az1_cis, "Availability Zone 1", "ru-central1-a") {
+        Deployment_Node(k8s_cis_az1, "Kubernetes Node Pool", "K8s Workers") {
+            Container(gw_cis_1, "API Gateway Pod", "Kong / NGINX", "[FP7] Реплика 1/3\nLiveness probe: 10s", $tags="failure")
+            Container(booking_cis_1, "Booking Service Pod", "FastAPI", "[FP1] Автоперезапуск при сбое,\nHPA: 3-20 реплик", $tags="failure")
+            Container(driver_cis_1, "Driver Service Pod", "FastAPI", "[FP1] Автоперезапуск при сбое,\nHPA: 3-20 реплик", $tags="failure")
+        }
+        Container(kafka_broker_1, "Kafka Broker 1", "Apache Kafka", "[FP4] RF=3, min.insync.replicas=2\nISR-мониторинг", $tags="failure")
+        ContainerDb(pg_primary_cis, "PostgreSQL Primary", "Patroni", "[FP5] Синхронная репликация\nв standby, автоматический failover", $tags="failure")
+        ContainerDb(redis_primary_cis, "Redis Primary", "Redis Sentinel", "[FP6] Sentinel мониторинг,\nавтоматический failover", $tags="failure")
+    }
+
+    Deployment_Node(az2_cis, "Availability Zone 2", "ru-central1-b") {
+        Deployment_Node(k8s_cis_az2, "Kubernetes Node Pool", "K8s Workers") {
+            Container(gw_cis_2, "API Gateway Pod", "Kong / NGINX", "[FP7] Реплика 2/3", $tags="recovery")
+            Container(booking_cis_2, "Booking Service Pod", "FastAPI", "[FP1] Реплика в другой AZ", $tags="recovery")
+            Container(driver_cis_2, "Driver Service Pod", "FastAPI", "[FP1] Реплика в другой AZ", $tags="recovery")
+        }
+        Container(kafka_broker_2, "Kafka Broker 2", "Apache Kafka", "[FP4] ISR-реплика", $tags="recovery")
+        ContainerDb(pg_standby_cis, "PostgreSQL Standby", "Patroni", "[FP5] Синхронный standby,\nпромоутится в primary при сбое", $tags="recovery")
+        ContainerDb(redis_replica_cis, "Redis Replica", "Redis Sentinel", "[FP6] Промоутится при сбое primary", $tags="recovery")
+    }
+
+    Deployment_Node(az3_cis, "Availability Zone 3", "ru-central1-d") {
+        Container(kafka_broker_3, "Kafka Broker 3", "Apache Kafka", "[FP4] ISR-реплика", $tags="recovery")
+        Container(gw_cis_3, "API Gateway Pod", "Kong / NGINX", "[FP7] Реплика 3/3\n[FP2] Распределение по 3 AZ", $tags="recovery")
+    }
+}
+
+' ============================================================
+' === REGION: SEA (Singapore, AWS) ===
+' ============================================================
+Deployment_Node(region_sea, "Region: SEA", "Singapore, AWS ap-southeast-1") {
+
+    Deployment_Node(az1_sea, "Availability Zone 1", "ap-southeast-1a") {
+        Container(gw_sea, "API Gateway Pods", "Kong / NGINX", "3 реплики, multi-AZ", $tags="recovery")
+        Container(services_sea, "Domain Microservices", "FastAPI (8 сервисов)", "HPA: 3-20 реплик на сервис,\nмульти-AZ размещение", $tags="recovery")
+        Container(kafka_sea, "Kafka Cluster", "Apache Kafka (3 brokers)", "RF=3, min.insync.replicas=2,\nмульти-AZ", $tags="recovery")
+        ContainerDb(pg_sea, "PostgreSQL HA", "Patroni (primary + standby)", "Региональные данные SEA,\nавтоматический failover", $tags="recovery")
+        ContainerDb(redis_sea, "Redis HA", "Redis Sentinel", "3 узла, автоматический failover", $tags="recovery")
+    }
+}
+
+' ============================================================
+' === REGION: LATAM (São Paulo, AWS) ===
+' ============================================================
+Deployment_Node(region_latam, "Region: LATAM", "São Paulo, AWS sa-east-1") {
+
+    Deployment_Node(az1_latam, "Availability Zone 1", "sa-east-1a") {
+        Container(gw_latam, "API Gateway Pods", "Kong / NGINX", "3 реплики, multi-AZ", $tags="recovery")
+        Container(services_latam, "Domain Microservices", "FastAPI (8 сервисов)", "HPA: 3-20 реплик на сервис,\nмульти-AZ размещение", $tags="recovery")
+        Container(kafka_latam, "Kafka Cluster", "Apache Kafka (3 brokers)", "RF=3, min.insync.replicas=2,\nмульти-AZ", $tags="recovery")
+        ContainerDb(pg_latam, "PostgreSQL HA", "Patroni (primary + standby)", "Региональные данные LATAM,\nавтоматический failover", $tags="recovery")
+        ContainerDb(redis_latam, "Redis HA", "Redis Sentinel", "3 узла, автоматический failover", $tags="recovery")
+    }
+}
+
+' ============================================================
+' === CROSS-REGION REPLICATION ===
+' ============================================================
+Deployment_Node(cross_region, "Cross-Region Replication", "Async") {
+    Container(mirrormaker, "MirrorMaker 2", "Kafka MirrorMaker 2", "Репликация выбранных топиков\nмежду региональными Kafka-кластерами\n[FP8] Автономная работа при партиции", $tags="global")
+    Container(pg_logical, "Logical Replication", "PostgreSQL Logical Rep.", "Кросс-региональная репликация\nглобальных данных (профили, правила)\n[FP8] Догоняющая репликация", $tags="global")
+}
+
+' ============================================================
+' === RELATIONSHIPS ===
+' ============================================================
+
+' === Traffic flow ===
+Rel(waf, geodns, "Очищенный трафик", $tags="traffic")
+Rel(geodns, global_lb, "DNS-резолюция", $tags="traffic")
+Rel(health_checker, gw_cis_1, "Health check /healthz", $tags="traffic")
+Rel(health_checker, gw_sea, "Health check /healthz", $tags="traffic")
+Rel(health_checker, gw_latam, "Health check /healthz", $tags="traffic")
+
+Rel(global_lb, gw_cis_1, "Трафик CIS-пользователей", $tags="traffic")
+Rel(global_lb, gw_sea, "Трафик SEA-пользователей", $tags="traffic")
+Rel(global_lb, gw_latam, "Трафик LATAM-пользователей", $tags="traffic")
+
+' === Failover arrows ===
+Rel(gw_cis_1, gw_cis_2, "[FP7] LB reroute\nпри сбое пода", $tags="failover")
+Rel(pg_primary_cis, pg_standby_cis, "[FP5] Patroni promote\n< 30 сек", $tags="failover")
+Rel(redis_primary_cis, redis_replica_cis, "[FP6] Sentinel promote\n< 10 сек", $tags="failover")
+Rel(kafka_broker_1, kafka_broker_2, "[FP4] ISR leader election\n< 30 сек", $tags="failover")
+
+' === Region failover ===
+Rel(global_lb, gw_sea, "[FP3] Failover при отказе CIS:\nDNS TTL=30s, автопереключение", $tags="failover")
+Rel(global_lb, gw_latam, "[FP3] Failover при отказе SEA:\nавтопереключение к LATAM", $tags="failover")
+
+' === Cross-region replication ===
+Rel(mirrormaker, kafka_broker_1, "Репликация топиков\n(analytics, fraud, config)", $tags="replication")
+Rel(mirrormaker, kafka_sea, "Репликация топиков", $tags="replication")
+Rel(mirrormaker, kafka_latam, "Репликация топиков", $tags="replication")
+
+Rel(pg_logical, pg_primary_cis, "Логическая репликация\nглобальных таблиц", $tags="replication")
+Rel(pg_logical, pg_sea, "Логическая репликация\nглобальных таблиц", $tags="replication")
+Rel(pg_logical, pg_latam, "Логическая репликация\nглобальных таблиц", $tags="replication")
+
+@enduml
